@@ -1,6 +1,6 @@
 const STORAGE_KEY = "promptLibrary.prompts.v1";
 
-/** @typedef {{ id: string, title: string, content: string, createdAt: number }} Prompt */
+/** @typedef {{ id: string, title: string, content: string, createdAt: number, rating: number }} Prompt */
 
 const els = {
   form: document.getElementById("promptForm"),
@@ -64,6 +64,8 @@ function render() {
     .map((p) => {
       const title = escapeHtml(p.title);
       const preview = escapeHtml(wordsPreview(p.content));
+      const rating = p.rating || 0;
+      const ratingText = rating > 0 ? `${rating}.0/5.0` : "Unrated";
       return `
         <article class="card" data-id="${escapeHtml(p.id)}">
           <div class="card-top">
@@ -75,6 +77,10 @@ function render() {
             </div>
           </div>
           <p class="preview">${preview}</p>
+          <div class="card-bottom">
+            ${renderStars(rating, p.id)}
+            <span class="rating-text">${ratingText}</span>
+          </div>
         </article>
       `;
     })
@@ -91,6 +97,7 @@ function addPrompt(title, content) {
     title,
     content,
     createdAt: Date.now(),
+    rating: 0,
   };
 
   const prompts = getPrompts();
@@ -102,6 +109,34 @@ function deletePrompt(id) {
   const prompts = getPrompts();
   const next = prompts.filter((p) => p.id !== id);
   setPrompts(next);
+}
+
+function updatePromptRating(promptId, rating) {
+  const prompts = getPrompts();
+  const prompt = prompts.find((p) => p.id === promptId);
+  if (!prompt) return;
+
+  prompt.rating = Math.max(0, Math.min(5, rating));
+  setPrompts(prompts);
+}
+
+function renderStars(rating, promptId) {
+  const stars = [];
+  for (let i = 1; i <= 5; i++) {
+    const filled = i <= rating;
+    stars.push(`
+      <button 
+        class="star-btn" 
+        data-star="${i}" 
+        data-prompt-id="${escapeHtml(promptId)}"
+        aria-label="Rate ${i} star${i > 1 ? "s" : ""}"
+        type="button"
+      >
+        ${filled ? "★" : "☆"}
+      </button>
+    `);
+  }
+  return `<div class="rating-stars">${stars.join("")}</div>`;
 }
 
 els.form.addEventListener("submit", (e) => {
@@ -118,6 +153,19 @@ els.form.addEventListener("submit", (e) => {
 });
 
 els.cards.addEventListener("click", (e) => {
+  // Handle star rating clicks
+  const starBtn = e.target.closest("button.star-btn");
+  if (starBtn) {
+    const promptId = starBtn.getAttribute("data-prompt-id");
+    const starValue = parseInt(starBtn.getAttribute("data-star"), 10);
+    if (promptId && !isNaN(starValue)) {
+      updatePromptRating(promptId, starValue);
+      render();
+    }
+    return;
+  }
+
+  // Handle delete button clicks
   const btn = e.target.closest("button[data-action]");
   if (!btn) return;
 
