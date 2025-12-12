@@ -695,4 +695,528 @@ function removeUndoNotification() {
 
 render();
 
+// ============================================================================
+// EXPORT/IMPORT SYSTEM
+// ============================================================================
+
+/**
+ * Export JSON schema version for future compatibility
+ */
+const EXPORT_VERSION = "1.0.0";
+
+/**
+ * Calculates statistics for the exported data
+ * @param {Prompt[]} prompts - Array of prompts
+ * @returns {Object} Statistics object
+ */
+function calculateExportStatistics(prompts) {
+  const totalPrompts = prompts.length;
+  
+  // Calculate average rating (excluding unrated)
+  const ratedPrompts = prompts.filter(p => p.rating > 0);
+  const averageRating = ratedPrompts.length > 0
+    ? ratedPrompts.reduce((sum, p) => sum + p.rating, 0) / ratedPrompts.length
+    : 0;
+  
+  // Find most used model
+  const modelCounts = {};
+  prompts.forEach(p => {
+    if (p.metadata?.model) {
+      modelCounts[p.metadata.model] = (modelCounts[p.metadata.model] || 0) + 1;
+    }
+  });
+  
+  const mostUsedModel = Object.entries(modelCounts).length > 0
+    ? Object.entries(modelCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0]
+    : null;
+  
+  // Total token estimates
+  let totalMinTokens = 0;
+  let totalMaxTokens = 0;
+  prompts.forEach(p => {
+    if (p.metadata?.tokenEstimate) {
+      totalMinTokens += p.metadata.tokenEstimate.min;
+      totalMaxTokens += p.metadata.tokenEstimate.max;
+    }
+  });
+  
+  return {
+    totalPrompts,
+    averageRating: Math.round(averageRating * 10) / 10,
+    mostUsedModel,
+    totalMinTokens,
+    totalMaxTokens,
+    ratedPromptsCount: ratedPrompts.length
+  };
+}
+
+/**
+ * Validates data integrity before export
+ * @param {Prompt[]} prompts - Array of prompts
+ * @param {Object} notes - Notes object
+ * @returns {{ valid: boolean, errors: string[] }}
+ */
+function validateExportData(prompts, notes) {
+  const errors = [];
+  
+  // Check if prompts is an array
+  if (!Array.isArray(prompts)) {
+    errors.push('Prompts data is not an array');
+    return { valid: false, errors };
+  }
+  
+  // Validate each prompt
+  prompts.forEach((prompt, index) => {
+    if (!prompt.id) {
+      errors.push(`Prompt at index ${index} is missing an ID`);
+    }
+    if (!prompt.title) {
+      errors.push(`Prompt at index ${index} is missing a title`);
+    }
+    if (!prompt.content) {
+      errors.push(`Prompt at index ${index} is missing content`);
+    }
+    if (typeof prompt.createdAt !== 'number') {
+      errors.push(`Prompt at index ${index} has invalid createdAt timestamp`);
+    }
+  });
+  
+  // Validate notes structure
+  if (typeof notes !== 'object' || notes === null) {
+    errors.push('Notes data is not a valid object');
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * Exports all library data to a JSON file
+ */
+function exportLibrary() {
+  try {
+    // Gather all data
+    const prompts = getPrompts();
+    const notes = getAllNotes();
+    
+    // Validate data
+    const validation = validateExportData(prompts, notes);
+    if (!validation.valid) {
+      console.error('Export validation failed:', validation.errors);
+      showNotification('Export failed: Data validation errors', 'error');
+      return;
+    }
+    
+    // Calculate statistics
+    const statistics = calculateExportStatistics(prompts);
+    
+    // Create export object
+    const exportData = {
+      version: EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      statistics,
+      data: {
+        prompts,
+        notes
+      }
+    };
+    
+    // Create blob and download
+    const jsonString = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    // Create download link with timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+    const filename = `prompt-library-export-${timestamp}.json`;
+    
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    showNotification(`Successfully exported ${statistics.totalPrompts} prompts`, 'success');
+  } catch (error) {
+    console.error('Export error:', error);
+    showNotification('Export failed: ' + error.message, 'error');
+  }
+}
+
+/**
+ * Validates imported JSON structure and version
+ * @param {Object} data - Parsed JSON data
+ * @returns {{ valid: boolean, errors: string[], warnings: string[] }}
+ */
+function validateImportData(data) {
+  const errors = [];
+  const warnings = [];
+  
+  // Check version
+  if (!data.version) {
+    errors.push('Missing version number');
+  } else if (data.version !== EXPORT_VERSION) {
+    warnings.push(`Version mismatch: file is ${data.version}, current is ${EXPORT_VERSION}`);
+  }
+  
+  // Check required fields
+  if (!data.exportedAt) {
+    warnings.push('Missing export timestamp');
+  }
+  
+  if (!data.data) {
+    errors.push('Missing data section');
+    return { valid: false, errors, warnings };
+  }
+  
+  // Validate prompts
+  if (!Array.isArray(data.data.prompts)) {
+    errors.push('Prompts data is not an array');
+  } else {
+    data.data.prompts.forEach((prompt, index) => {
+      if (!prompt.id) {
+        errors.push(`Prompt at index ${index} is missing an ID`);
+      }
+      if (!prompt.title) {
+        errors.push(`Prompt at index ${index} is missing a title`);
+      }
+      if (!prompt.content) {
+        errors.push(`Prompt at index ${index} is missing content`);
+      }
+    });
+  }
+  
+  // Validate notes
+  if (typeof data.data.notes !== 'object' || data.data.notes === null) {
+    errors.push('Notes data is not a valid object');
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings
+  };
+}
+
+/**
+ * Checks for duplicate IDs between existing and imported data
+ * @param {Prompt[]} existingPrompts - Current prompts
+ * @param {Prompt[]} importedPrompts - Imported prompts
+ * @returns {{ duplicates: string[], uniqueImports: Prompt[] }}
+ */
+function checkDuplicates(existingPrompts, importedPrompts) {
+  const existingIds = new Set(existingPrompts.map(p => p.id));
+  const duplicates = [];
+  const uniqueImports = [];
+  
+  importedPrompts.forEach(prompt => {
+    if (existingIds.has(prompt.id)) {
+      duplicates.push(prompt.id);
+    } else {
+      uniqueImports.push(prompt);
+    }
+  });
+  
+  return { duplicates, uniqueImports };
+}
+
+/**
+ * Creates a backup of current data
+ * @returns {Object} Backup object
+ */
+function createBackup() {
+  return {
+    prompts: getPrompts(),
+    notes: getAllNotes(),
+    timestamp: Date.now()
+  };
+}
+
+/**
+ * Restores data from backup
+ * @param {Object} backup - Backup object
+ */
+function restoreFromBackup(backup) {
+  if (!backup) return;
+  setPrompts(backup.prompts);
+  setAllNotes(backup.notes);
+}
+
+/**
+ * Import library data with merge/replace option
+ * @param {Object} importData - Parsed import data
+ * @param {string} strategy - 'merge', 'replace', or 'skip'
+ */
+function performImport(importData, strategy) {
+  // Create backup before import
+  const backup = createBackup();
+  
+  try {
+    const importedPrompts = importData.data.prompts;
+    const importedNotes = importData.data.notes;
+    
+    if (strategy === 'replace') {
+      // Replace all data
+      setPrompts(importedPrompts);
+      setAllNotes(importedNotes);
+      showNotification(`Successfully imported ${importedPrompts.length} prompts (replaced existing)`, 'success');
+    } else if (strategy === 'merge') {
+      // Merge data
+      const existingPrompts = getPrompts();
+      const { duplicates, uniqueImports } = checkDuplicates(existingPrompts, importedPrompts);
+      
+      // Add unique imports
+      const mergedPrompts = [...existingPrompts, ...uniqueImports];
+      setPrompts(mergedPrompts);
+      
+      // Merge notes (only for new prompts)
+      const existingNotes = getAllNotes();
+      const mergedNotes = { ...existingNotes };
+      
+      uniqueImports.forEach(prompt => {
+        if (importedNotes[prompt.id]) {
+          mergedNotes[prompt.id] = importedNotes[prompt.id];
+        }
+      });
+      
+      setAllNotes(mergedNotes);
+      
+      const message = duplicates.length > 0
+        ? `Imported ${uniqueImports.length} new prompts (${duplicates.length} duplicates skipped)`
+        : `Successfully imported ${uniqueImports.length} prompts`;
+      
+      showNotification(message, 'success');
+    } else if (strategy === 'skip') {
+      // User cancelled
+      showNotification('Import cancelled', 'info');
+      return;
+    }
+    
+    // Refresh UI
+    render();
+  } catch (error) {
+    console.error('Import error:', error);
+    // Rollback on failure
+    restoreFromBackup(backup);
+    showNotification('Import failed: ' + error.message + ' (data restored)', 'error');
+    render();
+  }
+}
+
+/**
+ * Handles file selection and initiates import
+ */
+function importLibrary() {
+  // Create file input
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json';
+  
+  input.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    try {
+      // Read file
+      const text = await file.text();
+      const importData = JSON.parse(text);
+      
+      // Validate import data
+      const validation = validateImportData(importData);
+      
+      if (!validation.valid) {
+        showNotification('Import failed: Invalid file format\n' + validation.errors.join('\n'), 'error');
+        return;
+      }
+      
+      // Show warnings if any
+      if (validation.warnings.length > 0) {
+        console.warn('Import warnings:', validation.warnings);
+      }
+      
+      // Check for duplicates
+      const existingPrompts = getPrompts();
+      const { duplicates } = checkDuplicates(existingPrompts, importData.data.prompts);
+      
+      if (existingPrompts.length === 0) {
+        // No existing data, just import
+        performImport(importData, 'replace');
+      } else if (duplicates.length > 0) {
+        // Show merge conflict resolution dialog
+        showMergeDialog(importData, duplicates.length);
+      } else {
+        // No duplicates, ask to merge or replace
+        showImportDialog(importData);
+      }
+    } catch (error) {
+      console.error('Import file read error:', error);
+      if (error instanceof SyntaxError) {
+        showNotification('Import failed: Invalid JSON file', 'error');
+      } else {
+        showNotification('Import failed: ' + error.message, 'error');
+      }
+    }
+  });
+  
+  input.click();
+}
+
+/**
+ * Shows import strategy dialog (no duplicates)
+ * @param {Object} importData - Import data
+ */
+function showImportDialog(importData) {
+  const existingCount = getPrompts().length;
+  const importCount = importData.data.prompts.length;
+  
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-content">
+      <h3 class="modal-title">Import Prompts</h3>
+      <p class="modal-text">
+        You have ${existingCount} existing prompts.<br>
+        The file contains ${importCount} prompts.
+      </p>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-secondary" data-action="merge">
+          Merge (Add ${importCount} new)
+        </button>
+        <button class="modal-btn modal-btn-danger" data-action="replace">
+          Replace All
+        </button>
+        <button class="modal-btn modal-btn-ghost" data-action="cancel">
+          Cancel
+        </button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(dialog);
+  
+  // Handle button clicks
+  dialog.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    
+    const action = btn.getAttribute('data-action');
+    
+    if (action === 'merge') {
+      performImport(importData, 'merge');
+    } else if (action === 'replace') {
+      performImport(importData, 'replace');
+    }
+    
+    dialog.remove();
+  });
+}
+
+/**
+ * Shows merge conflict resolution dialog
+ * @param {Object} importData - Import data
+ * @param {number} duplicateCount - Number of duplicates
+ */
+function showMergeDialog(importData, duplicateCount) {
+  const existingCount = getPrompts().length;
+  const importCount = importData.data.prompts.length;
+  const uniqueCount = importCount - duplicateCount;
+  
+  const dialog = document.createElement('div');
+  dialog.className = 'modal-overlay';
+  dialog.innerHTML = `
+    <div class="modal-content">
+      <h3 class="modal-title">⚠️ Duplicate Prompts Found</h3>
+      <p class="modal-text">
+        <strong>${duplicateCount}</strong> duplicate prompt${duplicateCount > 1 ? 's' : ''} detected.<br>
+        <strong>${uniqueCount}</strong> unique prompt${uniqueCount > 1 ? 's' : ''} can be imported.
+      </p>
+      <div class="modal-info">
+        <div class="modal-info-row">
+          <span>Current library:</span>
+          <strong>${existingCount} prompts</strong>
+        </div>
+        <div class="modal-info-row">
+          <span>Import file:</span>
+          <strong>${importCount} prompts</strong>
+        </div>
+      </div>
+      <p class="modal-text-small">
+        How would you like to proceed?
+      </p>
+      <div class="modal-actions">
+        <button class="modal-btn modal-btn-primary" data-action="merge">
+          Add ${uniqueCount} New (Skip Duplicates)
+        </button>
+        <button class="modal-btn modal-btn-danger" data-action="replace">
+          Replace All Data
+        </button>
+        <button class="modal-btn modal-btn-ghost" data-action="cancel">
+          Cancel
+        </button>
+      </div>
+    </div>
+  `;
+  
+  document.body.appendChild(dialog);
+  
+  // Handle button clicks
+  dialog.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn) return;
+    
+    const action = btn.getAttribute('data-action');
+    
+    if (action === 'merge') {
+      performImport(importData, 'merge');
+    } else if (action === 'replace') {
+      performImport(importData, 'replace');
+    }
+    
+    dialog.remove();
+  });
+}
+
+/**
+ * Shows notification message
+ * @param {string} message - Message to display
+ * @param {string} type - 'success', 'error', 'info'
+ */
+function showNotification(message, type = 'info') {
+  // Remove existing notification
+  const existing = document.getElementById('exportNotification');
+  if (existing) {
+    existing.remove();
+  }
+  
+  const notification = document.createElement('div');
+  notification.id = 'exportNotification';
+  notification.className = `export-notification export-notification-${type}`;
+  notification.textContent = message;
+  
+  document.body.appendChild(notification);
+  
+  // Auto-remove after 5 seconds
+  setTimeout(() => {
+    notification.remove();
+  }, 5000);
+}
+
+// Add event listeners for export/import buttons (will be added to HTML)
+document.addEventListener('DOMContentLoaded', () => {
+  const exportBtn = document.getElementById('exportBtn');
+  const importBtn = document.getElementById('importBtn');
+  
+  if (exportBtn) {
+    exportBtn.addEventListener('click', exportLibrary);
+  }
+  
+  if (importBtn) {
+    importBtn.addEventListener('click', importLibrary);
+  }
+});
+
 

@@ -59,8 +59,18 @@
       </section>
 
       <section class="section-header" aria-label="Saved prompts">
-        <h2 class="section-title">Saved prompts</h2>
-        <p id="countText" class="muted" aria-live="polite"></p>
+        <div class="section-header-left">
+          <h2 class="section-title">Saved prompts</h2>
+          <p id="countText" class="muted" aria-live="polite"></p>
+        </div>
+        <div class="section-header-right">
+          <button id="exportBtn" class="btn-import-export" type="button" aria-label="Export library">
+            📤 Export
+          </button>
+          <button id="importBtn" class="btn-import-export" type="button" aria-label="Import library">
+            📥 Import
+          </button>
+        </div>
       </section>
 
       <section id="cards" class="cards" aria-live="polite"></section>
