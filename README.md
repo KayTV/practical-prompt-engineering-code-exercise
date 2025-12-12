@@ -4,4 +4,21 @@ This is a companion repository for the [Practical Prompt Engineering](https://fr
 
 ### About this Repo
 
-This repo contains the final code for the **Prompt Library** application build in the course. The `reference-project` branch is the application demonstrated at the beginning of the course. The commits on the `main` branch are the progress checks while for the application build during the course.
+This repo contains a minimal **Prompt Library** application built with **HTML, CSS, and JavaScript**. It lets you save prompts locally (via `localStorage`), view them as cards, and delete them.
+
+### Features
+
+- **Create prompts**: Title + prompt content form
+- **Save to localStorage**: Prompts persist across page refreshes
+- **Prompt cards**: Title + short content preview + delete button
+- **Delete prompts**: Removes from `localStorage` and updates the UI
+
+### Files
+
+- **`index.html`**: App structure (form + saved prompt list)
+- **`styles.css`**: Modern “developer theme” styling
+- **`app.js`**: Save/render/delete logic backed by `localStorage`
+
+### Run it
+
+Open `index.html` in your browser (no install/build steps required).

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prompt Library</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container">
+        <h1 class="title">Prompt Library</h1>
+        <p class="subtitle">Save and manage reusable prompts locally.</p>
+      </div>
+    </header>
+
+    <main class="container">
+      <section class="panel" aria-label="Create prompt">
+        <form id="promptForm" class="form">
+          <div class="field">
+            <label for="promptTitle">Title</label>
+            <input
+              id="promptTitle"
+              name="title"
+              type="text"
+              placeholder="e.g., Summarize an article"
+              autocomplete="off"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="promptContent">Prompt</label>
+            <textarea
+              id="promptContent"
+              name="content"
+              rows="6"
+              placeholder="Write your prompt content here..."
+              required
+            ></textarea>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">Save prompt</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="section-header" aria-label="Saved prompts">
+        <h2 class="section-title">Saved prompts</h2>
+        <p id="countText" class="muted" aria-live="polite"></p>
+      </section>
+
+      <section id="cards" class="cards" aria-live="polite"></section>
+    </main>
+
+    <footer class="footer">
+      <div class="container muted">
+        Stored in your browser via <code>localStorage</code>.
+      </div>
+    </footer>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
+
+
