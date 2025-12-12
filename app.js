@@ -1,8 +1,10 @@
 const STORAGE_KEY = "promptLibrary.prompts.v1";
 const NOTES_STORAGE_KEY = "promptLibrary.notes.v1";
 
-/** @typedef {{ id: string, title: string, content: string, createdAt: number, rating: number }} Prompt */
+/** @typedef {{ id: string, title: string, content: string, createdAt: number, rating: number, metadata?: MetadataObject }} Prompt */
 /** @typedef {{ id: string, content: string, createdAt: number, lastEdited: number }} Note */
+/** @typedef {{ min: number, max: number, confidence: 'high' | 'medium' | 'low' }} TokenEstimate */
+/** @typedef {{ model: string, createdAt: string, updatedAt: string, tokenEstimate: TokenEstimate }} MetadataObject */
 
 // Undo state for recently deleted notes
 let undoState = { noteId: null, promptId: null, note: null, timeoutId: null };
@@ -11,12 +13,130 @@ const els = {
   form: document.getElementById("promptForm"),
   title: document.getElementById("promptTitle"),
   content: document.getElementById("promptContent"),
+  modelName: document.getElementById("promptModel"),
   cards: document.getElementById("cards"),
   countText: document.getElementById("countText"),
 };
 
 function safeTrim(value) {
   return String(value ?? "").trim();
+}
+
+// ============================================================================
+// METADATA TRACKING SYSTEM
+// ============================================================================
+
+/**
+ * Estimates token count for given text
+ * @param {string} text - The text to estimate tokens for
+ * @param {boolean} isCode - Whether the text is code
+ * @returns {TokenEstimate} Token estimate with min, max, and confidence
+ */
+function estimateTokens(text, isCode = false) {
+  if (typeof text !== 'string') {
+    throw new Error('Text must be a string');
+  }
+  
+  const charCount = text.length;
+  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+  
+  // Base calculation
+  let minTokens = Math.round(0.75 * wordCount);
+  let maxTokens = Math.round(0.25 * charCount);
+  
+  // Apply code multiplier
+  if (isCode) {
+    minTokens = Math.round(minTokens * 1.3);
+    maxTokens = Math.round(maxTokens * 1.3);
+  }
+  
+  // Determine confidence based on average token count
+  const avgTokens = (minTokens + maxTokens) / 2;
+  let confidence = 'high';
+  if (avgTokens > 5000) {
+    confidence = 'low';
+  } else if (avgTokens >= 1000) {
+    confidence = 'medium';
+  }
+  
+  return {
+    min: minTokens,
+    max: maxTokens,
+    confidence
+  };
+}
+
+/**
+ * Validates ISO 8601 date string
+ * @param {string} dateString - The date string to validate
+ * @returns {boolean} Whether the date string is valid
+ */
+function isValidISO8601(dateString) {
+  if (typeof dateString !== 'string') return false;
+  const date = new Date(dateString);
+  return !isNaN(date.getTime()) && dateString === date.toISOString();
+}
+
+/**
+ * Creates metadata object for a prompt
+ * @param {string} modelName - Name of the model
+ * @param {string} content - Content to estimate tokens from
+ * @returns {MetadataObject} Metadata object with timestamps and token estimate
+ */
+function trackModel(modelName, content) {
+  // Validate model name
+  if (typeof modelName !== 'string' || modelName.trim().length === 0) {
+    throw new Error('Model name must be a non-empty string');
+  }
+  
+  if (modelName.length > 100) {
+    throw new Error('Model name must not exceed 100 characters');
+  }
+  
+  // Validate content
+  if (typeof content !== 'string') {
+    throw new Error('Content must be a string');
+  }
+  
+  const now = new Date().toISOString();
+  const tokenEstimate = estimateTokens(content, false);
+  
+  return {
+    model: modelName.trim(),
+    createdAt: now,
+    updatedAt: now,
+    tokenEstimate
+  };
+}
+
+/**
+ * Updates the updatedAt timestamp in metadata
+ * @param {MetadataObject} metadata - Metadata object to update
+ * @returns {MetadataObject} Updated metadata object
+ */
+function updateTimestamps(metadata) {
+  // Validate metadata object
+  if (!metadata || typeof metadata !== 'object') {
+    throw new Error('Metadata must be an object');
+  }
+  
+  if (!metadata.createdAt || !isValidISO8601(metadata.createdAt)) {
+    throw new Error('Metadata must have a valid createdAt ISO 8601 timestamp');
+  }
+  
+  const now = new Date().toISOString();
+  const createdDate = new Date(metadata.createdAt);
+  const updatedDate = new Date(now);
+  
+  // Validate updatedAt >= createdAt
+  if (updatedDate < createdDate) {
+    throw new Error('updatedAt must be greater than or equal to createdAt');
+  }
+  
+  return {
+    ...metadata,
+    updatedAt: now
+  };
 }
 
 function getPrompts() {
@@ -150,6 +270,7 @@ function render() {
       const preview = escapeHtml(wordsPreview(p.content));
       const rating = p.rating || 0;
       const ratingText = rating > 0 ? `${rating}.0/5.0` : "Unrated";
+      const metadataHtml = renderMetadata(p.metadata);
       return `
         <article class="card" data-id="${escapeHtml(p.id)}">
           <div class="card-top">
@@ -161,6 +282,7 @@ function render() {
             </div>
           </div>
           <p class="preview">${preview}</p>
+          ${metadataHtml}
           <div class="card-bottom">
             ${renderStars(rating, p.id)}
             <span class="rating-text">${ratingText}</span>
@@ -172,7 +294,7 @@ function render() {
     .join("");
 }
 
-function addPrompt(title, content) {
+function addPrompt(title, content, modelName) {
   /** @type {Prompt} */
   const prompt = {
     id:
@@ -184,6 +306,16 @@ function addPrompt(title, content) {
     createdAt: Date.now(),
     rating: 0,
   };
+
+  // Add metadata if model name is provided
+  if (modelName && modelName.trim().length > 0) {
+    try {
+      prompt.metadata = trackModel(modelName, content);
+    } catch (error) {
+      console.error('Error creating metadata:', error);
+      // Continue without metadata if there's an error
+    }
+  }
 
   const prompts = getPrompts();
   prompts.push(prompt);
@@ -234,6 +366,76 @@ function formatTimestamp(timestamp) {
     minute: "2-digit",
     hour12: true
   });
+}
+
+/**
+ * Formats ISO 8601 timestamp to human-readable format
+ * @param {string} isoString - ISO 8601 date string
+ * @returns {string} Formatted date string
+ */
+function formatISOTimestamp(isoString) {
+  try {
+    const date = new Date(isoString);
+    return date.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true
+    });
+  } catch (error) {
+    return 'Invalid date';
+  }
+}
+
+/**
+ * Renders metadata section for a prompt card
+ * @param {MetadataObject} metadata - Metadata object
+ * @returns {string} HTML string for metadata display
+ */
+function renderMetadata(metadata) {
+  if (!metadata) return '';
+  
+  const { model, createdAt, updatedAt, tokenEstimate } = metadata;
+  const { min, max, confidence } = tokenEstimate;
+  
+  // Determine confidence color class
+  const confidenceClass = {
+    'high': 'confidence-high',
+    'medium': 'confidence-medium',
+    'low': 'confidence-low'
+  }[confidence] || 'confidence-medium';
+  
+  const createdFormatted = formatISOTimestamp(createdAt);
+  const updatedFormatted = formatISOTimestamp(updatedAt);
+  const isUpdated = createdAt !== updatedAt;
+  
+  return `
+    <div class="metadata-section">
+      <div class="metadata-row">
+        <span class="metadata-label">Model:</span>
+        <span class="metadata-value">${escapeHtml(model)}</span>
+      </div>
+      <div class="metadata-row">
+        <span class="metadata-label">Created:</span>
+        <span class="metadata-value">${createdFormatted}</span>
+      </div>
+      ${isUpdated ? `
+        <div class="metadata-row">
+          <span class="metadata-label">Updated:</span>
+          <span class="metadata-value">${updatedFormatted}</span>
+        </div>
+      ` : ''}
+      <div class="metadata-row">
+        <span class="metadata-label">Tokens:</span>
+        <span class="metadata-value">
+          ${min}–${max}
+          <span class="confidence-badge ${confidenceClass}">${confidence}</span>
+        </span>
+      </div>
+    </div>
+  `;
 }
 
 function renderNotes(promptId) {
@@ -306,9 +508,10 @@ els.form.addEventListener("submit", (e) => {
 
   const title = safeTrim(els.title.value);
   const content = safeTrim(els.content.value);
+  const modelName = safeTrim(els.modelName.value);
   if (!title || !content) return;
 
-  addPrompt(title, content);
+  addPrompt(title, content, modelName);
   els.form.reset();
   els.title.focus();
   render();
