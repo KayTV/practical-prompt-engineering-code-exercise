@@ -305,4 +305,238 @@ code {
   color: rgba(255, 255, 255, 0.86);
 }
 
+/* Notes Section Styles */
+.notes-section {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.notes-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--mono);
+  cursor: pointer;
+  padding: 4px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.2s ease;
+}
+
+.notes-toggle-btn:hover {
+  color: var(--accent);
+}
+
+.notes-toggle-icon {
+  display: inline-block;
+  transition: transform 0.3s ease;
+  font-size: 10px;
+}
+
+.notes-section.collapsed .notes-toggle-icon {
+  transform: rotate(-90deg);
+}
+
+.notes-section.collapsed .notes-content {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  padding: 0;
+}
+
+.notes-content {
+  display: grid;
+  gap: 10px;
+  max-height: 2000px;
+  overflow: hidden;
+  opacity: 1;
+  transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+  padding-top: 4px;
+}
+
+.btn-add-note {
+  background: rgba(124, 58, 237, 0.15);
+  border: 1px solid rgba(124, 58, 237, 0.35);
+  color: rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-add-note:hover {
+  background: rgba(124, 58, 237, 0.25);
+  border-color: rgba(124, 58, 237, 0.55);
+}
+
+.notes-empty {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+  padding: 12px;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.note-item {
+  position: relative;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.note-textarea {
+  width: 100%;
+  min-height: 70px;
+  max-height: 150px;
+  resize: vertical;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: var(--sans);
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.note-textarea:focus {
+  border-color: rgba(124, 58, 237, 0.5);
+  background: rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+  outline: none;
+}
+
+.note-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.note-timestamp {
+  flex: 1;
+}
+
+.note-char-count {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.note-char-count.char-limit-warning {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.note-delete-btn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: rgba(255, 255, 255, 0.8);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--mono);
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+}
+
+.note-item:hover .note-delete-btn {
+  opacity: 1;
+}
+
+.note-delete-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.note-saving-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 11px;
+  color: var(--accent-2);
+  font-family: var(--mono);
+  background: rgba(0, 0, 0, 0.6);
+  padding: 4px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  animation: fadeIn 0.2s ease;
+}
+
+.undo-notification {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 12px 18px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  animation: slideUp 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 20px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.undo-notification .undo-btn {
+  background: var(--accent);
+  border: none;
+  color: white;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.2s ease;
+}
+
+.undo-notification .undo-btn:hover {
+  filter: brightness(1.2);
+}
+
 
