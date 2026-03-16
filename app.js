@@ -7,7 +7,7 @@
 let undoState = { noteId: null, promptId: null, note: null, timeoutId: null };
 
 // In-memory state (synced with the database)
-let state = { prompts: [], notes: {} };
+let state = { prompts: [], notes: {}, user: null };
 
 const els = {
   form: document.getElementById("promptForm"),
@@ -32,7 +32,11 @@ async function api(path, method = 'GET', body) {
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`API error ${res.status}`);
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try { message = (await res.json()).error || message; } catch {}
+    throw new Error(message);
+  }
   return res.json();
 }
 
@@ -1155,20 +1159,102 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ============================================================================
-// INIT — load data from DB then render
+// AUTH
+// ============================================================================
+
+const authPanel = document.getElementById('authPanel');
+const appMain = document.getElementById('appMain');
+const userBar = document.getElementById('userBar');
+const userEmailEl = document.getElementById('userEmail');
+
+function showApp(user) {
+  state.user = user;
+  authPanel.style.display = 'none';
+  appMain.style.display = '';
+  userBar.style.display = 'flex';
+  userEmailEl.textContent = user.email;
+}
+
+function showAuth() {
+  state.user = null;
+  state.prompts = [];
+  state.notes = {};
+  authPanel.style.display = '';
+  appMain.style.display = 'none';
+  userBar.style.display = 'none';
+}
+
+// Auth tab switching
+document.querySelectorAll('.auth-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const target = tab.getAttribute('data-tab');
+    document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('loginForm').style.display = target === 'login' ? '' : 'none';
+    document.getElementById('signupForm').style.display = target === 'signup' ? '' : 'none';
+    document.getElementById('loginError').textContent = '';
+    document.getElementById('signupError').textContent = '';
+  });
+});
+
+// Login
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('loginEmail').value;
+  const password = document.getElementById('loginPassword').value;
+  const errorEl = document.getElementById('loginError');
+  errorEl.textContent = '';
+
+  try {
+    const user = await api('/api/auth/login', 'POST', { email, password });
+    const [prompts, notes] = await Promise.all([api('/api/prompts'), api('/api/notes')]);
+    state.prompts = prompts;
+    state.notes = notes;
+    showApp(user);
+    render();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+});
+
+// Signup
+document.getElementById('signupForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const email = document.getElementById('signupEmail').value;
+  const password = document.getElementById('signupPassword').value;
+  const errorEl = document.getElementById('signupError');
+  errorEl.textContent = '';
+
+  try {
+    const user = await api('/api/auth/signup', 'POST', { email, password });
+    state.prompts = [];
+    state.notes = {};
+    showApp(user);
+    render();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+});
+
+// Logout
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+  await api('/api/auth/logout', 'POST');
+  showAuth();
+});
+
+// ============================================================================
+// INIT — check session, then load data or show auth
 // ============================================================================
 
 async function init() {
   try {
-    const [prompts, notes] = await Promise.all([
-      api('/api/prompts'),
-      api('/api/notes'),
-    ]);
+    const user = await api('/api/auth/me');
+    const [prompts, notes] = await Promise.all([api('/api/prompts'), api('/api/notes')]);
     state.prompts = prompts;
     state.notes = notes;
-  } catch (error) {
-    console.error('Failed to load data from server:', error);
-    showNotification('Could not connect to the server. Is it running?', 'error');
+    showApp(user);
+  } catch {
+    showAuth();
   }
   render();
 }

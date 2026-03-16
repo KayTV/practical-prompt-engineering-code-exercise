@@ -8,13 +8,57 @@
   </head>
   <body>
     <header class="app-header">
-      <div class="container">
-        <h1 class="title">Prompt Library</h1>
-        <p class="subtitle">Save and manage reusable prompts locally.</p>
+      <div class="container app-header-inner">
+        <div>
+          <h1 class="title">Prompt Library</h1>
+          <p class="subtitle">Save and manage reusable prompts.</p>
+        </div>
+        <div id="userBar" class="user-bar" style="display:none">
+          <span id="userEmail" class="user-email"></span>
+          <button id="logoutBtn" class="btn-logout" type="button">Log Out</button>
+        </div>
       </div>
     </header>
 
-    <main class="container">
+    <!-- Auth panel (shown when logged out) -->
+    <div id="authPanel" class="auth-panel" style="display:none">
+      <div class="container">
+        <div class="auth-card">
+          <div class="auth-tabs">
+            <button type="button" class="auth-tab active" data-tab="login">Log In</button>
+            <button type="button" class="auth-tab" data-tab="signup">Sign Up</button>
+          </div>
+
+          <form id="loginForm" class="auth-form">
+            <div class="field">
+              <label for="loginEmail">Email</label>
+              <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="loginPassword">Password</label>
+              <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required />
+            </div>
+            <p id="loginError" class="auth-error"></p>
+            <button type="submit" class="btn btn-primary">Log In</button>
+          </form>
+
+          <form id="signupForm" class="auth-form" style="display:none">
+            <div class="field">
+              <label for="signupEmail">Email</label>
+              <input id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="signupPassword">Password</label>
+              <input id="signupPassword" type="password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6" />
+            </div>
+            <p id="signupError" class="auth-error"></p>
+            <button type="submit" class="btn btn-primary">Sign Up</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <main class="container" id="appMain" style="display:none">
       <section class="panel" aria-label="Create prompt">
         <form id="promptForm" class="form">
           <div class="field">
@@ -85,5 +129,3 @@
     <script src="./app.js" defer></script>
   </body>
 </html>
-
-
