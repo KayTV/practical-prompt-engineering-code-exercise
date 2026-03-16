@@ -1,6 +1,3 @@
-const STORAGE_KEY = "promptLibrary.prompts.v1";
-const NOTES_STORAGE_KEY = "promptLibrary.notes.v1";
-
 /** @typedef {{ id: string, title: string, content: string, createdAt: number, rating: number, metadata?: MetadataObject }} Prompt */
 /** @typedef {{ id: string, content: string, createdAt: number, lastEdited: number }} Note */
 /** @typedef {{ min: number, max: number, confidence: 'high' | 'medium' | 'low' }} TokenEstimate */
@@ -8,6 +5,9 @@ const NOTES_STORAGE_KEY = "promptLibrary.notes.v1";
 
 // Undo state for recently deleted notes
 let undoState = { noteId: null, promptId: null, note: null, timeoutId: null };
+
+// In-memory state (synced with the database)
+let state = { prompts: [], notes: {} };
 
 const els = {
   form: document.getElementById("promptForm"),
@@ -20,6 +20,20 @@ const els = {
 
 function safeTrim(value) {
   return String(value ?? "").trim();
+}
+
+// ============================================================================
+// API HELPER
+// ============================================================================
+
+async function api(path, method = 'GET', body) {
+  const res = await fetch(path, {
+    method,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
 }
 
 // ============================================================================
@@ -36,20 +50,20 @@ function estimateTokens(text, isCode = false) {
   if (typeof text !== 'string') {
     throw new Error('Text must be a string');
   }
-  
+
   const charCount = text.length;
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-  
+
   // Base calculation
   let minTokens = Math.round(0.75 * wordCount);
   let maxTokens = Math.round(0.25 * charCount);
-  
+
   // Apply code multiplier
   if (isCode) {
     minTokens = Math.round(minTokens * 1.3);
     maxTokens = Math.round(maxTokens * 1.3);
   }
-  
+
   // Determine confidence based on average token count
   const avgTokens = (minTokens + maxTokens) / 2;
   let confidence = 'high';
@@ -58,7 +72,7 @@ function estimateTokens(text, isCode = false) {
   } else if (avgTokens >= 1000) {
     confidence = 'medium';
   }
-  
+
   return {
     min: minTokens,
     max: maxTokens,
@@ -88,19 +102,19 @@ function trackModel(modelName, content) {
   if (typeof modelName !== 'string' || modelName.trim().length === 0) {
     throw new Error('Model name must be a non-empty string');
   }
-  
+
   if (modelName.length > 100) {
     throw new Error('Model name must not exceed 100 characters');
   }
-  
+
   // Validate content
   if (typeof content !== 'string') {
     throw new Error('Content must be a string');
   }
-  
+
   const now = new Date().toISOString();
   const tokenEstimate = estimateTokens(content, false);
-  
+
   return {
     model: modelName.trim(),
     createdAt: now,
@@ -119,109 +133,120 @@ function updateTimestamps(metadata) {
   if (!metadata || typeof metadata !== 'object') {
     throw new Error('Metadata must be an object');
   }
-  
+
   if (!metadata.createdAt || !isValidISO8601(metadata.createdAt)) {
     throw new Error('Metadata must have a valid createdAt ISO 8601 timestamp');
   }
-  
+
   const now = new Date().toISOString();
   const createdDate = new Date(metadata.createdAt);
   const updatedDate = new Date(now);
-  
+
   // Validate updatedAt >= createdAt
   if (updatedDate < createdDate) {
     throw new Error('updatedAt must be greater than or equal to createdAt');
   }
-  
+
   return {
     ...metadata,
     updatedAt: now
   };
 }
 
+// ============================================================================
+// STATE ACCESSORS (sync reads from in-memory state)
+// ============================================================================
+
 function getPrompts() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed;
-  } catch {
-    return [];
-  }
+  return state.prompts;
 }
 
-function setPrompts(prompts) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(prompts));
-}
-
-// Notes storage functions
 function getAllNotes() {
-  try {
-    const raw = localStorage.getItem(NOTES_STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function setAllNotes(notesData) {
-  try {
-    localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(notesData));
-  } catch (e) {
-    console.error("Failed to save notes:", e);
-  }
+  return state.notes;
 }
 
 function getNotesForPrompt(promptId) {
-  const allNotes = getAllNotes();
-  return allNotes[promptId] || [];
+  return state.notes[promptId] || [];
 }
 
-function addNote(promptId, content) {
-  const allNotes = getAllNotes();
-  if (!allNotes[promptId]) {
-    allNotes[promptId] = [];
+// ============================================================================
+// ASYNC MUTATIONS (update DB + in-memory state)
+// ============================================================================
+
+async function addPrompt(title, content, modelName) {
+  /** @type {Prompt} */
+  const prompt = {
+    id:
+      (globalThis.crypto && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `p_${Date.now()}_${Math.random().toString(16).slice(2)}`),
+    title,
+    content,
+    createdAt: Date.now(),
+    rating: 0,
+  };
+
+  if (modelName && modelName.trim().length > 0) {
+    try {
+      prompt.metadata = trackModel(modelName, content);
+    } catch (error) {
+      console.error('Error creating metadata:', error);
+    }
   }
-  
+
+  await api('/api/prompts', 'POST', prompt);
+  state.prompts.push(prompt);
+}
+
+async function deletePrompt(id) {
+  await api(`/api/prompts/${id}`, 'DELETE');
+  state.prompts = state.prompts.filter((p) => p.id !== id);
+  delete state.notes[id];
+}
+
+async function updatePromptRating(promptId, rating) {
+  const clamped = Math.max(0, Math.min(5, rating));
+  await api(`/api/prompts/${promptId}/rating`, 'PATCH', { rating: clamped });
+  const prompt = state.prompts.find((p) => p.id === promptId);
+  if (prompt) prompt.rating = clamped;
+}
+
+async function addNote(promptId, content) {
   const note = {
     id: `note-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     content: safeTrim(content),
     createdAt: Date.now(),
     lastEdited: Date.now(),
   };
-  
-  allNotes[promptId].push(note);
-  setAllNotes(allNotes);
+
+  await api('/api/notes', 'POST', { ...note, promptId });
+  if (!state.notes[promptId]) state.notes[promptId] = [];
+  state.notes[promptId].push(note);
   return note;
 }
 
-function updateNote(promptId, noteId, content) {
-  const allNotes = getAllNotes();
-  const notes = allNotes[promptId];
-  if (!notes) return;
-  
-  const note = notes.find(n => n.id === noteId);
-  if (!note) return;
-  
-  note.content = safeTrim(content);
-  note.lastEdited = Date.now();
-  setAllNotes(allNotes);
+async function updateNote(promptId, noteId, content) {
+  const lastEdited = Date.now();
+  const trimmed = safeTrim(content);
+  await api(`/api/notes/${noteId}`, 'PATCH', { content: trimmed, lastEdited });
+  const notes = state.notes[promptId];
+  if (notes) {
+    const note = notes.find((n) => n.id === noteId);
+    if (note) {
+      note.content = trimmed;
+      note.lastEdited = lastEdited;
+    }
+  }
 }
 
-function deleteNote(promptId, noteId) {
-  const allNotes = getAllNotes();
-  const notes = allNotes[promptId];
+async function deleteNote(promptId, noteId) {
+  const notes = state.notes[promptId];
   if (!notes) return null;
-  
-  const index = notes.findIndex(n => n.id === noteId);
+  const index = notes.findIndex((n) => n.id === noteId);
   if (index === -1) return null;
-  
   const deletedNote = notes[index];
+  await api(`/api/notes/${noteId}`, 'DELETE');
   notes.splice(index, 1);
-  setAllNotes(allNotes);
   return deletedNote;
 }
 
@@ -233,6 +258,10 @@ function debounce(fn, delay) {
     timeoutId = setTimeout(() => fn(...args), delay);
   };
 }
+
+// ============================================================================
+// RENDER
+// ============================================================================
 
 function wordsPreview(text, maxWords = 18) {
   const words = safeTrim(text).split(/\s+/).filter(Boolean);
@@ -294,57 +323,14 @@ function render() {
     .join("");
 }
 
-function addPrompt(title, content, modelName) {
-  /** @type {Prompt} */
-  const prompt = {
-    id:
-      (globalThis.crypto && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `p_${Date.now()}_${Math.random().toString(16).slice(2)}`),
-    title,
-    content,
-    createdAt: Date.now(),
-    rating: 0,
-  };
-
-  // Add metadata if model name is provided
-  if (modelName && modelName.trim().length > 0) {
-    try {
-      prompt.metadata = trackModel(modelName, content);
-    } catch (error) {
-      console.error('Error creating metadata:', error);
-      // Continue without metadata if there's an error
-    }
-  }
-
-  const prompts = getPrompts();
-  prompts.push(prompt);
-  setPrompts(prompts);
-}
-
-function deletePrompt(id) {
-  const prompts = getPrompts();
-  const next = prompts.filter((p) => p.id !== id);
-  setPrompts(next);
-}
-
-function updatePromptRating(promptId, rating) {
-  const prompts = getPrompts();
-  const prompt = prompts.find((p) => p.id === promptId);
-  if (!prompt) return;
-
-  prompt.rating = Math.max(0, Math.min(5, rating));
-  setPrompts(prompts);
-}
-
 function renderStars(rating, promptId) {
   const stars = [];
   for (let i = 1; i <= 5; i++) {
     const filled = i <= rating;
     stars.push(`
-      <button 
-        class="star-btn" 
-        data-star="${i}" 
+      <button
+        class="star-btn"
+        data-star="${i}"
         data-prompt-id="${escapeHtml(promptId)}"
         aria-label="Rate ${i} star${i > 1 ? "s" : ""}"
         type="button"
@@ -396,21 +382,21 @@ function formatISOTimestamp(isoString) {
  */
 function renderMetadata(metadata) {
   if (!metadata) return '';
-  
+
   const { model, createdAt, updatedAt, tokenEstimate } = metadata;
   const { min, max, confidence } = tokenEstimate;
-  
+
   // Determine confidence color class
   const confidenceClass = {
     'high': 'confidence-high',
     'medium': 'confidence-medium',
     'low': 'confidence-low'
   }[confidence] || 'confidence-medium';
-  
+
   const createdFormatted = formatISOTimestamp(createdAt);
   const updatedFormatted = formatISOTimestamp(updatedAt);
   const isUpdated = createdAt !== updatedAt;
-  
+
   return `
     <div class="metadata-section">
       <div class="metadata-row">
@@ -441,15 +427,15 @@ function renderMetadata(metadata) {
 function renderNotes(promptId) {
   const notes = getNotesForPrompt(promptId);
   const hasNotes = notes.length > 0;
-  
+
   const notesHtml = notes.map(note => {
     const charCount = note.content.length;
     const timestamp = formatTimestamp(note.lastEdited);
     return `
       <div class="note-item" data-note-id="${escapeHtml(note.id)}">
-        <textarea 
-          class="note-textarea" 
-          maxlength="500" 
+        <textarea
+          class="note-textarea"
+          maxlength="500"
           placeholder="Write your note here..."
           data-prompt-id="${escapeHtml(promptId)}"
           data-note-id="${escapeHtml(note.id)}"
@@ -457,8 +443,8 @@ function renderNotes(promptId) {
         <div class="note-footer">
           <span class="note-timestamp">Last edited: ${timestamp}</span>
           <span class="note-char-count ${charCount >= 475 ? 'char-limit-warning' : ''}">${charCount}/500</span>
-          <button 
-            class="note-delete-btn" 
+          <button
+            class="note-delete-btn"
             type="button"
             data-action="delete-note"
             data-prompt-id="${escapeHtml(promptId)}"
@@ -470,16 +456,16 @@ function renderNotes(promptId) {
       </div>
     `;
   }).join("");
-  
+
   const emptyState = !hasNotes ? `
     <div class="notes-empty">No notes yet. Click 'Add Note' to get started.</div>
   ` : "";
-  
+
   return `
     <div class="notes-section">
       <div class="notes-header">
-        <button 
-          class="notes-toggle-btn" 
+        <button
+          class="notes-toggle-btn"
           type="button"
           data-action="toggle-notes"
           data-prompt-id="${escapeHtml(promptId)}"
@@ -487,8 +473,8 @@ function renderNotes(promptId) {
         >
           <span class="notes-toggle-icon">▼</span> Notes (${notes.length})
         </button>
-        <button 
-          class="btn-add-note" 
+        <button
+          class="btn-add-note"
           type="button"
           data-action="add-note"
           data-prompt-id="${escapeHtml(promptId)}"
@@ -503,7 +489,11 @@ function renderNotes(promptId) {
   `;
 }
 
-els.form.addEventListener("submit", (e) => {
+// ============================================================================
+// EVENT HANDLERS
+// ============================================================================
+
+els.form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
   const title = safeTrim(els.title.value);
@@ -511,21 +501,31 @@ els.form.addEventListener("submit", (e) => {
   const modelName = safeTrim(els.modelName.value);
   if (!title || !content) return;
 
-  addPrompt(title, content, modelName);
-  els.form.reset();
-  els.title.focus();
-  render();
+  try {
+    await addPrompt(title, content, modelName);
+    els.form.reset();
+    els.title.focus();
+    render();
+  } catch (error) {
+    console.error('Failed to save prompt:', error);
+    showNotification('Failed to save prompt', 'error');
+  }
 });
 
-els.cards.addEventListener("click", (e) => {
+els.cards.addEventListener("click", async (e) => {
   // Handle star rating clicks
   const starBtn = e.target.closest("button.star-btn");
   if (starBtn) {
     const promptId = starBtn.getAttribute("data-prompt-id");
     const starValue = parseInt(starBtn.getAttribute("data-star"), 10);
     if (promptId && !isNaN(starValue)) {
-      updatePromptRating(promptId, starValue);
-      render();
+      try {
+        await updatePromptRating(promptId, starValue);
+        render();
+      } catch (error) {
+        console.error('Failed to update rating:', error);
+        showNotification('Failed to update rating', 'error');
+      }
     }
     return;
   }
@@ -534,55 +534,68 @@ els.cards.addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-action]");
   if (btn) {
     const action = btn.getAttribute("data-action");
-    
+
     // Handle delete prompt
     if (action === "delete") {
       const card = btn.closest("[data-id]");
       const id = card?.getAttribute("data-id");
       if (!id) return;
-      deletePrompt(id);
-      render();
+      try {
+        await deletePrompt(id);
+        render();
+      } catch (error) {
+        console.error('Failed to delete prompt:', error);
+        showNotification('Failed to delete prompt', 'error');
+      }
       return;
     }
-    
+
     // Handle toggle notes
     if (action === "toggle-notes") {
-      const promptId = btn.getAttribute("data-prompt-id");
       const notesSection = btn.closest(".notes-section");
       if (notesSection) {
         notesSection.classList.toggle("collapsed");
       }
       return;
     }
-    
+
     // Handle add note
     if (action === "add-note") {
       const promptId = btn.getAttribute("data-prompt-id");
       if (!promptId) return;
-      addNote(promptId, "");
-      render();
-      // Focus on the newly added textarea
-      setTimeout(() => {
-        const card = document.querySelector(`[data-id="${promptId}"]`);
-        const textareas = card?.querySelectorAll(".note-textarea");
-        if (textareas && textareas.length > 0) {
-          textareas[textareas.length - 1].focus();
-        }
-      }, 50);
+      try {
+        await addNote(promptId, "");
+        render();
+        setTimeout(() => {
+          const card = document.querySelector(`[data-id="${promptId}"]`);
+          const textareas = card?.querySelectorAll(".note-textarea");
+          if (textareas && textareas.length > 0) {
+            textareas[textareas.length - 1].focus();
+          }
+        }, 50);
+      } catch (error) {
+        console.error('Failed to add note:', error);
+        showNotification('Failed to add note', 'error');
+      }
       return;
     }
-    
+
     // Handle delete note
     if (action === "delete-note") {
       const promptId = btn.getAttribute("data-prompt-id");
       const noteId = btn.getAttribute("data-note-id");
       if (!promptId || !noteId) return;
-      
-      const deletedNote = deleteNote(promptId, noteId);
-      if (deletedNote) {
-        showUndoNotification(promptId, noteId, deletedNote);
+
+      try {
+        const deletedNote = await deleteNote(promptId, noteId);
+        if (deletedNote) {
+          showUndoNotification(promptId, noteId, deletedNote);
+        }
+        render();
+      } catch (error) {
+        console.error('Failed to delete note:', error);
+        showNotification('Failed to delete note', 'error');
       }
-      render();
       return;
     }
   }
@@ -592,13 +605,13 @@ els.cards.addEventListener("click", (e) => {
 els.cards.addEventListener("input", (e) => {
   const textarea = e.target;
   if (!textarea.classList.contains("note-textarea")) return;
-  
+
   const promptId = textarea.getAttribute("data-prompt-id");
   const noteId = textarea.getAttribute("data-note-id");
   const content = textarea.value;
-  
+
   if (!promptId || !noteId) return;
-  
+
   // Update character count
   const noteItem = textarea.closest(".note-item");
   const charCount = noteItem?.querySelector(".note-char-count");
@@ -611,22 +624,24 @@ els.cards.addEventListener("input", (e) => {
       charCount.classList.remove("char-limit-warning");
     }
   }
-  
+
   // Show saving indicator
   const savingIndicator = noteItem?.querySelector(".note-saving-indicator");
   if (savingIndicator) {
     savingIndicator.style.display = "block";
   }
-  
+
   // Debounced auto-save
   debouncedSaveNote(promptId, noteId, content, savingIndicator);
 });
 
 // Create debounced save function
-const debouncedSaveNote = debounce((promptId, noteId, content, savingIndicator) => {
-  updateNote(promptId, noteId, content);
-  
-  // Hide saving indicator after a short delay
+const debouncedSaveNote = debounce(async (promptId, noteId, content, savingIndicator) => {
+  try {
+    await updateNote(promptId, noteId, content);
+  } catch (error) {
+    console.error('Failed to save note:', error);
+  }
   if (savingIndicator) {
     setTimeout(() => {
       savingIndicator.style.display = "none";
@@ -634,23 +649,23 @@ const debouncedSaveNote = debounce((promptId, noteId, content, savingIndicator) 
   }
 }, 500);
 
-// Undo notification functions
+// ============================================================================
+// UNDO NOTIFICATION
+// ============================================================================
+
 function showUndoNotification(promptId, noteId, deletedNote) {
-  // Clear existing undo timeout
   if (undoState.timeoutId) {
     clearTimeout(undoState.timeoutId);
     removeUndoNotification();
   }
-  
-  // Store undo state
+
   undoState = {
     promptId,
     noteId,
     note: deletedNote,
     timeoutId: null
   };
-  
-  // Create notification element
+
   const notification = document.createElement("div");
   notification.className = "undo-notification";
   notification.id = "undoNotification";
@@ -658,28 +673,26 @@ function showUndoNotification(promptId, noteId, deletedNote) {
     <span>Note deleted</span>
     <button class="undo-btn" type="button">Undo</button>
   `;
-  
-  // Handle undo click
-  notification.querySelector(".undo-btn").addEventListener("click", () => {
+
+  notification.querySelector(".undo-btn").addEventListener("click", async () => {
     if (undoState.note) {
-      const allNotes = getAllNotes();
-      if (!allNotes[undoState.promptId]) {
-        allNotes[undoState.promptId] = [];
+      try {
+        await api('/api/notes', 'POST', { ...undoState.note, promptId: undoState.promptId });
+        if (!state.notes[undoState.promptId]) state.notes[undoState.promptId] = [];
+        state.notes[undoState.promptId].push(undoState.note);
+        render();
+      } catch (error) {
+        console.error('Failed to restore note:', error);
+        showNotification('Failed to restore note', 'error');
       }
-      allNotes[undoState.promptId].push(undoState.note);
-      setAllNotes(allNotes);
-      render();
     }
     removeUndoNotification();
-    if (undoState.timeoutId) {
-      clearTimeout(undoState.timeoutId);
-    }
+    if (undoState.timeoutId) clearTimeout(undoState.timeoutId);
     undoState = { noteId: null, promptId: null, note: null, timeoutId: null };
   });
-  
+
   document.body.appendChild(notification);
-  
-  // Auto-remove after 10 seconds
+
   undoState.timeoutId = setTimeout(() => {
     removeUndoNotification();
     undoState = { noteId: null, promptId: null, note: null, timeoutId: null };
@@ -693,15 +706,10 @@ function removeUndoNotification() {
   }
 }
 
-render();
-
 // ============================================================================
 // EXPORT/IMPORT SYSTEM
 // ============================================================================
 
-/**
- * Export JSON schema version for future compatibility
- */
 const EXPORT_VERSION = "1.0.0";
 
 /**
@@ -711,26 +719,23 @@ const EXPORT_VERSION = "1.0.0";
  */
 function calculateExportStatistics(prompts) {
   const totalPrompts = prompts.length;
-  
-  // Calculate average rating (excluding unrated)
+
   const ratedPrompts = prompts.filter(p => p.rating > 0);
   const averageRating = ratedPrompts.length > 0
     ? ratedPrompts.reduce((sum, p) => sum + p.rating, 0) / ratedPrompts.length
     : 0;
-  
-  // Find most used model
+
   const modelCounts = {};
   prompts.forEach(p => {
     if (p.metadata?.model) {
       modelCounts[p.metadata.model] = (modelCounts[p.metadata.model] || 0) + 1;
     }
   });
-  
+
   const mostUsedModel = Object.entries(modelCounts).length > 0
     ? Object.entries(modelCounts).reduce((a, b) => a[1] > b[1] ? a : b)[0]
     : null;
-  
-  // Total token estimates
+
   let totalMinTokens = 0;
   let totalMaxTokens = 0;
   prompts.forEach(p => {
@@ -739,7 +744,7 @@ function calculateExportStatistics(prompts) {
       totalMaxTokens += p.metadata.tokenEstimate.max;
     }
   });
-  
+
   return {
     totalPrompts,
     averageRating: Math.round(averageRating * 10) / 10,
@@ -758,38 +763,24 @@ function calculateExportStatistics(prompts) {
  */
 function validateExportData(prompts, notes) {
   const errors = [];
-  
-  // Check if prompts is an array
+
   if (!Array.isArray(prompts)) {
     errors.push('Prompts data is not an array');
     return { valid: false, errors };
   }
-  
-  // Validate each prompt
+
   prompts.forEach((prompt, index) => {
-    if (!prompt.id) {
-      errors.push(`Prompt at index ${index} is missing an ID`);
-    }
-    if (!prompt.title) {
-      errors.push(`Prompt at index ${index} is missing a title`);
-    }
-    if (!prompt.content) {
-      errors.push(`Prompt at index ${index} is missing content`);
-    }
-    if (typeof prompt.createdAt !== 'number') {
-      errors.push(`Prompt at index ${index} has invalid createdAt timestamp`);
-    }
+    if (!prompt.id) errors.push(`Prompt at index ${index} is missing an ID`);
+    if (!prompt.title) errors.push(`Prompt at index ${index} is missing a title`);
+    if (!prompt.content) errors.push(`Prompt at index ${index} is missing content`);
+    if (typeof prompt.createdAt !== 'number') errors.push(`Prompt at index ${index} has invalid createdAt timestamp`);
   });
-  
-  // Validate notes structure
+
   if (typeof notes !== 'object' || notes === null) {
     errors.push('Notes data is not a valid object');
   }
-  
-  return {
-    valid: errors.length === 0,
-    errors
-  };
+
+  return { valid: errors.length === 0, errors };
 }
 
 /**
@@ -797,41 +788,32 @@ function validateExportData(prompts, notes) {
  */
 function exportLibrary() {
   try {
-    // Gather all data
     const prompts = getPrompts();
     const notes = getAllNotes();
-    
-    // Validate data
+
     const validation = validateExportData(prompts, notes);
     if (!validation.valid) {
       console.error('Export validation failed:', validation.errors);
       showNotification('Export failed: Data validation errors', 'error');
       return;
     }
-    
-    // Calculate statistics
+
     const statistics = calculateExportStatistics(prompts);
-    
-    // Create export object
+
     const exportData = {
       version: EXPORT_VERSION,
       exportedAt: new Date().toISOString(),
       statistics,
-      data: {
-        prompts,
-        notes
-      }
+      data: { prompts, notes }
     };
-    
-    // Create blob and download
+
     const jsonString = JSON.stringify(exportData, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    
-    // Create download link with timestamp
+
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
     const filename = `prompt-library-export-${timestamp}.json`;
-    
+
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
@@ -839,7 +821,7 @@ function exportLibrary() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    
+
     showNotification(`Successfully exported ${statistics.totalPrompts} prompts`, 'success');
   } catch (error) {
     console.error('Export error:', error);
@@ -855,51 +837,35 @@ function exportLibrary() {
 function validateImportData(data) {
   const errors = [];
   const warnings = [];
-  
-  // Check version
+
   if (!data.version) {
     errors.push('Missing version number');
   } else if (data.version !== EXPORT_VERSION) {
     warnings.push(`Version mismatch: file is ${data.version}, current is ${EXPORT_VERSION}`);
   }
-  
-  // Check required fields
-  if (!data.exportedAt) {
-    warnings.push('Missing export timestamp');
-  }
-  
+
+  if (!data.exportedAt) warnings.push('Missing export timestamp');
+
   if (!data.data) {
     errors.push('Missing data section');
     return { valid: false, errors, warnings };
   }
-  
-  // Validate prompts
+
   if (!Array.isArray(data.data.prompts)) {
     errors.push('Prompts data is not an array');
   } else {
     data.data.prompts.forEach((prompt, index) => {
-      if (!prompt.id) {
-        errors.push(`Prompt at index ${index} is missing an ID`);
-      }
-      if (!prompt.title) {
-        errors.push(`Prompt at index ${index} is missing a title`);
-      }
-      if (!prompt.content) {
-        errors.push(`Prompt at index ${index} is missing content`);
-      }
+      if (!prompt.id) errors.push(`Prompt at index ${index} is missing an ID`);
+      if (!prompt.title) errors.push(`Prompt at index ${index} is missing a title`);
+      if (!prompt.content) errors.push(`Prompt at index ${index} is missing content`);
     });
   }
-  
-  // Validate notes
+
   if (typeof data.data.notes !== 'object' || data.data.notes === null) {
     errors.push('Notes data is not a valid object');
   }
-  
-  return {
-    valid: errors.length === 0,
-    errors,
-    warnings
-  };
+
+  return { valid: errors.length === 0, errors, warnings };
 }
 
 /**
@@ -912,7 +878,7 @@ function checkDuplicates(existingPrompts, importedPrompts) {
   const existingIds = new Set(existingPrompts.map(p => p.id));
   const duplicates = [];
   const uniqueImports = [];
-  
+
   importedPrompts.forEach(prompt => {
     if (existingIds.has(prompt.id)) {
       duplicates.push(prompt.id);
@@ -920,30 +886,22 @@ function checkDuplicates(existingPrompts, importedPrompts) {
       uniqueImports.push(prompt);
     }
   });
-  
+
   return { duplicates, uniqueImports };
 }
 
-/**
- * Creates a backup of current data
- * @returns {Object} Backup object
- */
 function createBackup() {
   return {
-    prompts: getPrompts(),
-    notes: getAllNotes(),
+    prompts: [...state.prompts],
+    notes: JSON.parse(JSON.stringify(state.notes)),
     timestamp: Date.now()
   };
 }
 
-/**
- * Restores data from backup
- * @param {Object} backup - Backup object
- */
 function restoreFromBackup(backup) {
   if (!backup) return;
-  setPrompts(backup.prompts);
-  setAllNotes(backup.notes);
+  state.prompts = backup.prompts;
+  state.notes = backup.notes;
 }
 
 /**
@@ -951,56 +909,56 @@ function restoreFromBackup(backup) {
  * @param {Object} importData - Parsed import data
  * @param {string} strategy - 'merge', 'replace', or 'skip'
  */
-function performImport(importData, strategy) {
-  // Create backup before import
+async function performImport(importData, strategy) {
   const backup = createBackup();
-  
+
   try {
     const importedPrompts = importData.data.prompts;
     const importedNotes = importData.data.notes;
-    
+
     if (strategy === 'replace') {
-      // Replace all data
-      setPrompts(importedPrompts);
-      setAllNotes(importedNotes);
+      await api('/api/prompts', 'DELETE');
+      state.prompts = [];
+      state.notes = {};
+
+      for (const prompt of importedPrompts) {
+        await api('/api/prompts', 'POST', prompt);
+        state.prompts.push(prompt);
+      }
+      for (const [promptId, notes] of Object.entries(importedNotes)) {
+        state.notes[promptId] = notes;
+        for (const note of notes) {
+          await api('/api/notes', 'POST', { ...note, promptId });
+        }
+      }
       showNotification(`Successfully imported ${importedPrompts.length} prompts (replaced existing)`, 'success');
     } else if (strategy === 'merge') {
-      // Merge data
       const existingPrompts = getPrompts();
       const { duplicates, uniqueImports } = checkDuplicates(existingPrompts, importedPrompts);
-      
-      // Add unique imports
-      const mergedPrompts = [...existingPrompts, ...uniqueImports];
-      setPrompts(mergedPrompts);
-      
-      // Merge notes (only for new prompts)
-      const existingNotes = getAllNotes();
-      const mergedNotes = { ...existingNotes };
-      
-      uniqueImports.forEach(prompt => {
+
+      for (const prompt of uniqueImports) {
+        await api('/api/prompts', 'POST', prompt);
+        state.prompts.push(prompt);
         if (importedNotes[prompt.id]) {
-          mergedNotes[prompt.id] = importedNotes[prompt.id];
+          state.notes[prompt.id] = importedNotes[prompt.id];
+          for (const note of importedNotes[prompt.id]) {
+            await api('/api/notes', 'POST', { ...note, promptId: prompt.id });
+          }
         }
-      });
-      
-      setAllNotes(mergedNotes);
-      
+      }
+
       const message = duplicates.length > 0
         ? `Imported ${uniqueImports.length} new prompts (${duplicates.length} duplicates skipped)`
         : `Successfully imported ${uniqueImports.length} prompts`;
-      
       showNotification(message, 'success');
     } else if (strategy === 'skip') {
-      // User cancelled
       showNotification('Import cancelled', 'info');
       return;
     }
-    
-    // Refresh UI
+
     render();
   } catch (error) {
     console.error('Import error:', error);
-    // Rollback on failure
     restoreFromBackup(backup);
     showNotification('Import failed: ' + error.message + ' (data restored)', 'error');
     render();
@@ -1011,45 +969,37 @@ function performImport(importData, strategy) {
  * Handles file selection and initiates import
  */
 function importLibrary() {
-  // Create file input
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.json';
-  
+
   input.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     try {
-      // Read file
       const text = await file.text();
       const importData = JSON.parse(text);
-      
-      // Validate import data
+
       const validation = validateImportData(importData);
-      
+
       if (!validation.valid) {
         showNotification('Import failed: Invalid file format\n' + validation.errors.join('\n'), 'error');
         return;
       }
-      
-      // Show warnings if any
+
       if (validation.warnings.length > 0) {
         console.warn('Import warnings:', validation.warnings);
       }
-      
-      // Check for duplicates
+
       const existingPrompts = getPrompts();
       const { duplicates } = checkDuplicates(existingPrompts, importData.data.prompts);
-      
+
       if (existingPrompts.length === 0) {
-        // No existing data, just import
-        performImport(importData, 'replace');
+        await performImport(importData, 'replace');
       } else if (duplicates.length > 0) {
-        // Show merge conflict resolution dialog
         showMergeDialog(importData, duplicates.length);
       } else {
-        // No duplicates, ask to merge or replace
         showImportDialog(importData);
       }
     } catch (error) {
@@ -1061,7 +1011,7 @@ function importLibrary() {
       }
     }
   });
-  
+
   input.click();
 }
 
@@ -1072,7 +1022,7 @@ function importLibrary() {
 function showImportDialog(importData) {
   const existingCount = getPrompts().length;
   const importCount = importData.data.prompts.length;
-  
+
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
   dialog.innerHTML = `
@@ -1095,23 +1045,21 @@ function showImportDialog(importData) {
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(dialog);
-  
-  // Handle button clicks
-  dialog.addEventListener('click', (e) => {
+
+  dialog.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
-    
+
     const action = btn.getAttribute('data-action');
-    
-    if (action === 'merge') {
-      performImport(importData, 'merge');
-    } else if (action === 'replace') {
-      performImport(importData, 'replace');
-    }
-    
     dialog.remove();
+
+    if (action === 'merge') {
+      await performImport(importData, 'merge');
+    } else if (action === 'replace') {
+      await performImport(importData, 'replace');
+    }
   });
 }
 
@@ -1124,7 +1072,7 @@ function showMergeDialog(importData, duplicateCount) {
   const existingCount = getPrompts().length;
   const importCount = importData.data.prompts.length;
   const uniqueCount = importCount - duplicateCount;
-  
+
   const dialog = document.createElement('div');
   dialog.className = 'modal-overlay';
   dialog.innerHTML = `
@@ -1160,23 +1108,21 @@ function showMergeDialog(importData, duplicateCount) {
       </div>
     </div>
   `;
-  
+
   document.body.appendChild(dialog);
-  
-  // Handle button clicks
-  dialog.addEventListener('click', (e) => {
+
+  dialog.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn) return;
-    
+
     const action = btn.getAttribute('data-action');
-    
-    if (action === 'merge') {
-      performImport(importData, 'merge');
-    } else if (action === 'replace') {
-      performImport(importData, 'replace');
-    }
-    
     dialog.remove();
+
+    if (action === 'merge') {
+      await performImport(importData, 'merge');
+    } else if (action === 'replace') {
+      await performImport(importData, 'replace');
+    }
   });
 }
 
@@ -1186,37 +1132,45 @@ function showMergeDialog(importData, duplicateCount) {
  * @param {string} type - 'success', 'error', 'info'
  */
 function showNotification(message, type = 'info') {
-  // Remove existing notification
   const existing = document.getElementById('exportNotification');
-  if (existing) {
-    existing.remove();
-  }
-  
+  if (existing) existing.remove();
+
   const notification = document.createElement('div');
   notification.id = 'exportNotification';
   notification.className = `export-notification export-notification-${type}`;
   notification.textContent = message;
-  
+
   document.body.appendChild(notification);
-  
-  // Auto-remove after 5 seconds
-  setTimeout(() => {
-    notification.remove();
-  }, 5000);
+
+  setTimeout(() => { notification.remove(); }, 5000);
 }
 
-// Add event listeners for export/import buttons (will be added to HTML)
+// Add event listeners for export/import buttons
 document.addEventListener('DOMContentLoaded', () => {
   const exportBtn = document.getElementById('exportBtn');
   const importBtn = document.getElementById('importBtn');
-  
-  if (exportBtn) {
-    exportBtn.addEventListener('click', exportLibrary);
-  }
-  
-  if (importBtn) {
-    importBtn.addEventListener('click', importLibrary);
-  }
+
+  if (exportBtn) exportBtn.addEventListener('click', exportLibrary);
+  if (importBtn) importBtn.addEventListener('click', importLibrary);
 });
 
+// ============================================================================
+// INIT — load data from DB then render
+// ============================================================================
 
+async function init() {
+  try {
+    const [prompts, notes] = await Promise.all([
+      api('/api/prompts'),
+      api('/api/notes'),
+    ]);
+    state.prompts = prompts;
+    state.notes = notes;
+  } catch (error) {
+    console.error('Failed to load data from server:', error);
+    showNotification('Could not connect to the server. Is it running?', 'error');
+  }
+  render();
+}
+
+init();

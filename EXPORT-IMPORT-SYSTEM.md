@@ -385,4 +385,3 @@ Potential improvements for the system:
    - System doesn't track usage
    - No analytics or telemetry
    - Privacy-focused design
-
