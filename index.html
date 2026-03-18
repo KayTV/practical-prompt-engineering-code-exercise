@@ -1,75 +1,131 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Prompt Library</title>
-  <link rel="stylesheet" href="styles.css" />
-</head>
-<body>
-  <header class="app-header">
-    <h1>Prompt Library</h1>
-    <div class="header-tools" role="region" aria-label="Data tools">
-      <button type="button" id="export-btn" class="tool-btn" aria-label="Export prompts">Export</button>
-      <button type="button" id="import-btn" class="tool-btn" aria-label="Import prompts">Import</button>
-      <input type="file" id="import-file" accept="application/json" hidden aria-hidden="true" />
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prompt Library</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="container app-header-inner">
+        <div>
+          <h1 class="title">Prompt Library</h1>
+          <p class="subtitle">Save and manage reusable prompts.</p>
+        </div>
+        <div id="userBar" class="user-bar" style="display:none">
+          <span id="userEmail" class="user-email"></span>
+          <button id="logoutBtn" class="btn-logout" type="button">Log Out</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Auth panel (shown when logged out) -->
+    <div id="authPanel" class="auth-panel" style="display:none">
+      <div class="container">
+        <div class="auth-card">
+          <div class="auth-tabs">
+            <button type="button" class="auth-tab active" data-tab="login">Log In</button>
+            <button type="button" class="auth-tab" data-tab="signup">Sign Up</button>
+          </div>
+
+          <form id="loginForm" class="auth-form">
+            <div class="field">
+              <label for="loginEmail">Email</label>
+              <input id="loginEmail" type="email" placeholder="you@example.com" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="loginPassword">Password</label>
+              <input id="loginPassword" type="password" placeholder="••••••••" autocomplete="current-password" required />
+            </div>
+            <p id="loginError" class="auth-error"></p>
+            <button type="submit" class="btn btn-primary">Log In</button>
+          </form>
+
+          <form id="signupForm" class="auth-form" style="display:none">
+            <div class="field">
+              <label for="signupEmail">Email</label>
+              <input id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" required />
+            </div>
+            <div class="field">
+              <label for="signupPassword">Password</label>
+              <input id="signupPassword" type="password" placeholder="Min. 6 characters" autocomplete="new-password" required minlength="6" />
+            </div>
+            <p id="signupError" class="auth-error"></p>
+            <button type="submit" class="btn btn-primary">Sign Up</button>
+          </form>
+        </div>
+      </div>
     </div>
-  </header>
 
-  <main class="layout">
-    <section class="panel" aria-labelledby="form-heading">
-      <h2 id="form-heading" class="panel-title">Add Prompt</h2>
-      <form id="prompt-form" novalidate>
-        <div class="field-group">
-          <label for="prompt-title">Title</label>
-          <input type="text" id="prompt-title" name="title" placeholder="e.g. Blog Idea Generator" maxlength="120" required />
-          <p class="field-hint" id="title-hint">Required. Max 120 characters.</p>
+    <main class="container" id="appMain" style="display:none">
+      <section class="panel" aria-label="Create prompt">
+        <form id="promptForm" class="form">
+          <div class="field">
+            <label for="promptTitle">Title</label>
+            <input
+              id="promptTitle"
+              name="title"
+              type="text"
+              placeholder="e.g., Summarize an article"
+              autocomplete="off"
+              required
+            />
+          </div>
+
+          <div class="field">
+            <label for="promptContent">Prompt</label>
+            <textarea
+              id="promptContent"
+              name="content"
+              rows="6"
+              placeholder="Write your prompt content here..."
+              required
+            ></textarea>
+          </div>
+
+          <div class="field">
+            <label for="promptModel">Model (optional)</label>
+            <input
+              id="promptModel"
+              name="model"
+              type="text"
+              placeholder="e.g., GPT-4, Claude 3.5 Sonnet"
+              autocomplete="off"
+              maxlength="100"
+            />
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary">Save prompt</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="section-header" aria-label="Saved prompts">
+        <div class="section-header-left">
+          <h2 class="section-title">Saved prompts</h2>
+          <p id="countText" class="muted" aria-live="polite"></p>
         </div>
-        <div class="field-group">
-          <label for="model-name">Model</label>
-          <input type="text" id="model-name" name="model" placeholder="e.g. gpt-4o-mini" maxlength="100" required />
-          <p class="field-hint" id="model-hint">Required. Model identifier (max 100 chars).</p>
+        <div class="section-header-right">
+          <button id="exportBtn" class="btn-import-export" type="button" aria-label="Export library">
+            📤 Export
+          </button>
+          <button id="importBtn" class="btn-import-export" type="button" aria-label="Import library">
+            📥 Import
+          </button>
         </div>
-        <div class="field-group">
-          <label for="prompt-content">Content</label>
-          <textarea id="prompt-content" name="content" placeholder="Enter the full prompt here..." rows="6" required></textarea>
-          <p class="field-hint" id="content-hint">Required.</p>
-        </div>
-        <div class="actions">
-          <button type="submit" id="save-btn">Save Prompt</button>
-        </div>
-        <div id="form-error" class="form-error" role="alert" aria-live="polite"></div>
-      </form>
-    </section>
+      </section>
 
-    <section class="panel" aria-labelledby="saved-prompts-heading">
-      <div class="panel-header">
-        <h2 id="saved-prompts-heading" class="panel-title">Saved Prompts</h2>
-        <span id="prompt-count" class="count-badge" aria-live="polite"></span>
-      </div>
-      <div id="import-export-messages" class="iemessages" role="alert" aria-live="polite" hidden></div>
-      <div id="prompts-empty" class="empty-state" hidden>
-        <p>No prompts saved yet. Add your first one!</p>
-      </div>
-      <div id="prompts-list" class="cards" aria-live="polite"></div>
-    </section>
-  </main>
+      <section id="cards" class="cards" aria-live="polite"></section>
+    </main>
 
-  <template id="prompt-card-template">
-    <article class="card" data-id="">
-      <div class="card-main">
-        <h3 class="card-title"></h3>
-        <p class="card-preview"></p>
-        <div class="prompt-meta" data-role="metadata"></div>
+    <footer class="footer">
+      <div class="container muted">
+        Stored in <a href="https://neon.tech" target="_blank" rel="noopener">Neon</a> Postgres.
       </div>
-      <div class="card-actions">
-        <button class="delete-btn" type="button" aria-label="Delete prompt">Delete</button>
-      </div>
-    </article>
-  </template>
+    </footer>
 
-  <footer class="app-footer">Local-only storage. Clearing browser data will remove prompts.</footer>
-
-  <script src="script.js"></script>
-</body>
+    <script src="./app.js" defer></script>
+  </body>
 </html>
