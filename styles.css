@@ -866,6 +866,46 @@ code {
   }
 }
 
+/* ── Edit Card ───────────────────────────────────────────────────────────── */
+
+.card-editing {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), var(--shadow);
+}
+
+.card-editing .edit-content {
+  min-height: 120px;
+}
+
+.edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.btn-edit-save {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.btn-edit-cancel {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: calc(var(--radius) - 4px);
+  padding: 7px 14px;
+  font-size: 13px;
+  font-family: var(--sans);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-edit-cancel:hover {
+  border-color: #4e4e48;
+  color: var(--text);
+}
+
 /* ── Auth ────────────────────────────────────────────────────────────────── */
 
 .app-header-inner {

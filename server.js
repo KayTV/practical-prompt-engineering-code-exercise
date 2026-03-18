@@ -118,6 +118,15 @@ app.post('/api/prompts', requireAuth, asyncHandler(async (req, res) => {
   res.status(201).json({ id });
 }));
 
+app.patch('/api/prompts/:id', requireAuth, asyncHandler(async (req, res) => {
+  const { title, content, metadata } = req.body;
+  await pool.query(
+    'UPDATE prompts SET title = $1, content = $2, metadata = $3 WHERE id = $4 AND user_id = $5',
+    [title, content, metadata ?? null, req.params.id, req.session.userId]
+  );
+  res.json({ ok: true });
+}));
+
 app.patch('/api/prompts/:id/rating', requireAuth, asyncHandler(async (req, res) => {
   const { rating } = req.body;
   await pool.query(

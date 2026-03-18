@@ -7,7 +7,7 @@
 let undoState = { noteId: null, promptId: null, note: null, timeoutId: null };
 
 // In-memory state (synced with the database)
-let state = { prompts: [], notes: {}, user: null };
+let state = { prompts: [], notes: {}, user: null, editingId: null };
 
 const els = {
   form: document.getElementById("promptForm"),
@@ -299,6 +299,8 @@ function render() {
 
   els.cards.innerHTML = sorted
     .map((p) => {
+      if (state.editingId === p.id) return renderEditCard(p);
+
       const title = escapeHtml(p.title);
       const preview = escapeHtml(wordsPreview(p.content));
       const rating = p.rating || 0;
@@ -309,6 +311,9 @@ function render() {
           <div class="card-top">
             <h3 class="card-title">${title}</h3>
             <div class="card-actions">
+              <button class="icon-btn" type="button" data-action="edit" aria-label="Edit prompt">
+                Edit
+              </button>
               <button class="icon-btn icon-btn-danger" type="button" data-action="delete" aria-label="Delete prompt">
                 Delete
               </button>
@@ -325,6 +330,73 @@ function render() {
       `;
     })
     .join("");
+}
+
+function renderEditCard(p) {
+  const modelValue = escapeHtml(p.metadata?.model || '');
+  return `
+    <article class="card card-editing" data-id="${escapeHtml(p.id)}">
+      <div class="field">
+        <label>Title</label>
+        <input class="edit-field" data-field="title" value="${escapeHtml(p.title)}" maxlength="200" />
+      </div>
+      <div class="field">
+        <label>Prompt</label>
+        <textarea class="edit-field edit-content" data-field="content">${escapeHtml(p.content)}</textarea>
+      </div>
+      <div class="field">
+        <label>Model (optional)</label>
+        <input class="edit-field" data-field="model" value="${modelValue}" maxlength="100" />
+      </div>
+      <div class="edit-actions">
+        <button class="btn btn-primary btn-edit-save" type="button" data-action="save-edit">Save</button>
+        <button class="btn-edit-cancel" type="button" data-action="cancel-edit">Cancel</button>
+      </div>
+    </article>
+  `;
+}
+
+async function saveEditedPrompt(id) {
+  const card = els.cards.querySelector(`[data-id="${id}"]`);
+  if (!card) return;
+
+  const title = safeTrim(card.querySelector('[data-field="title"]').value);
+  const content = safeTrim(card.querySelector('[data-field="content"]').value);
+  const modelName = safeTrim(card.querySelector('[data-field="model"]').value);
+
+  if (!title || !content) {
+    showNotification('Title and prompt are required', 'error');
+    return;
+  }
+
+  const prompt = state.prompts.find(p => p.id === id);
+  if (!prompt) return;
+
+  let metadata = null;
+  if (modelName) {
+    if (prompt.metadata) {
+      metadata = {
+        ...prompt.metadata,
+        model: modelName,
+        updatedAt: new Date().toISOString(),
+        tokenEstimate: estimateTokens(content, false),
+      };
+    } else {
+      metadata = trackModel(modelName, content);
+    }
+  }
+
+  try {
+    await api(`/api/prompts/${id}`, 'PATCH', { title, content, metadata });
+    prompt.title = title;
+    prompt.content = content;
+    prompt.metadata = metadata || undefined;
+    state.editingId = null;
+    render();
+  } catch (error) {
+    console.error('Failed to save prompt:', error);
+    showNotification('Failed to save changes', 'error');
+  }
 }
 
 function renderStars(rating, promptId) {
@@ -539,6 +611,36 @@ els.cards.addEventListener("click", async (e) => {
   if (btn) {
     const action = btn.getAttribute("data-action");
 
+    // Handle edit prompt
+    if (action === "edit") {
+      const card = btn.closest("[data-id]");
+      const id = card?.getAttribute("data-id");
+      if (!id) return;
+      state.editingId = id;
+      render();
+      // Focus title field
+      setTimeout(() => {
+        els.cards.querySelector(`[data-id="${id}"] .edit-field`)?.focus();
+      }, 0);
+      return;
+    }
+
+    // Handle save edit
+    if (action === "save-edit") {
+      const card = btn.closest("[data-id]");
+      const id = card?.getAttribute("data-id");
+      if (!id) return;
+      await saveEditedPrompt(id);
+      return;
+    }
+
+    // Handle cancel edit
+    if (action === "cancel-edit") {
+      state.editingId = null;
+      render();
+      return;
+    }
+
     // Handle delete prompt
     if (action === "delete") {
       const card = btn.closest("[data-id]");
@@ -601,6 +703,24 @@ els.cards.addEventListener("click", async (e) => {
         showNotification('Failed to delete note', 'error');
       }
       return;
+    }
+  }
+});
+
+// Save edit on Ctrl/Cmd+Enter inside edit card
+els.cards.addEventListener("keydown", async (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    const card = e.target.closest(".card-editing");
+    if (card) {
+      e.preventDefault();
+      const id = card.getAttribute("data-id");
+      if (id) await saveEditedPrompt(id);
+    }
+  }
+  if (e.key === "Escape") {
+    if (e.target.closest(".card-editing")) {
+      state.editingId = null;
+      render();
     }
   }
 });
