@@ -11,7 +11,10 @@ import { randomUUID } from 'crypto';
 const { Pool } = pg;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({                                                                           
+  connectionString: process.env.DATABASE_URL,                                                     
+  ssl: { rejectUnauthorized: false },
+});
 
 const app = express();
 app.use(express.json());
